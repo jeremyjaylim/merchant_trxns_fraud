@@ -38,8 +38,8 @@ A common question in transaction monitoring is why this case study uses unsuperv
 ┌────────────────────────────────────────────────────────────────────────┐
 │                        Tabular Event Clustering                        │
 │                                                                        │
-│   Incoming Row  ──►  \[Features + Baseline Ratios]  ──►  Distance to    │
-│  (Single Event)                                         Centroid (Score)│
+│   Incoming Row  ──►  \[Features + Baseline Ratios]  ──►  Distance to   │
+│  (Single Event)                                        Centroid (Score)│
 └────────────────────────────────────────────────────────────────────────┘
 
 1. Unit of Prediction \& Operational Real-Time Scoring
