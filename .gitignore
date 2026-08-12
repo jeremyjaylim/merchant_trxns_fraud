@@ -1,23 +1,26 @@
-# Local MLflow run files and experiment tracking
+# Virtual Environment
+.venv/
+venv/
+env/
+ENV/
+
+# Python Cache & Artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# MLflow Local Database & Runs
+mlflow.db
 mlruns/
 .mlflow/
 
-# Python environment & cache
-__pycache__/
-*.pyc
-.venv/
-env/
-*.egg-info/
-
-# Local Model Artifacts (saved joblib files)
-models/*.joblib
-
-# Raw & processed data files (keep code clean)
-data/*.csv
-!data/debit_transactions.csv
-data/*.parquet
-
-# OS & IDE settings
+# OS and Editor Configs
+.DS_Store
+Thumbs.db
 .vscode/
 .idea/
-.DS_Store
+
+# Large Local Datasets (Uncomment if dataset shouldn't be pushed)
+# data/*.csv

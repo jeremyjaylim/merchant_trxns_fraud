@@ -1,176 +1,156 @@
+import sys
 from pathlib import Path
+
+# Add project root directory to Python path
+BASE_DIR = Path(__file__).resolve().parent
+sys.path.append(str(BASE_DIR))
+
 import joblib
 import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+import streamlit.components.v1 as components
 
-from src.features import prepare_clustering_features
+from src.features import extract_temporal_features, engineer_clustering_ratios
 from src.ingest import ingest_and_validate
 
-# Set page configuration
+# Set page config
 st.set_page_config(
-    page_title="Debit Anomaly Investigation Dashboard",
-    page_icon="🚨",
+    page_title="Debit Anomaly & Drift Monitoring Dashboard",
+    page_icon="🛡️",
     layout="wide",
 )
 
-# Paths
-PROJECT_ROOT = Path(__file__).resolve().parent
-MODEL_PATH = PROJECT_ROOT / "models" / "isolation_forest.joblib"
-DATA_PATH = PROJECT_ROOT / "data" / "debit_transactions.csv"
+MODEL_PATH = BASE_DIR / "models" / "isolation_forest.joblib"
+SCALER_PATH = BASE_DIR / "models" / "scaler.joblib"
+REPORT_PATH = BASE_DIR / "reports" / "data_drift_report.html"
 
 
-@st.cache_resource
-def load_model_artifacts():
-    """Loads saved Isolation Forest model."""
-    if not MODEL_PATH.exists():
-        st.error(
-            f"Model artifact not found at {MODEL_PATH}. Please run training first!"
-        )
-        st.stop()
-    return joblib.load(MODEL_PATH)
+def build_feature_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """Reconstructs feature matrix matching production feature requirements."""
+    transformed_df = extract_temporal_features(df)
+    transformed_df = engineer_clustering_ratios(transformed_df)
+
+    feature_df = pd.DataFrame()
+    feature_df["amt_log"] = np.log1p(transformed_df["amt"])
+    feature_df["amt_avg_daily_log"] = np.log1p(transformed_df["Amt_Avg_Daily"])
+    feature_df["trxn_count_avg_daily_log"] = np.log1p(
+        transformed_df["TrxnCount_Avg_Daily"]
+    )
+    feature_df["amt_to_avg_ratio_log"] = np.log1p(
+        transformed_df["amt_to_avg_ratio"]
+    )
+    feature_df["hour"] = transformed_df["hour"]
+    feature_df["is_weekend"] = transformed_df["is_weekend"]
+
+    return feature_df
 
 
 @st.cache_data
-def load_and_score_data():
-    """Ingests data, generates features, and scores all transactions."""
+def load_data_and_predict():
+    """Ingests raw transactions, applies feature transformations, and predicts anomalies."""
     raw_df = ingest_and_validate("debit_transactions.csv")
-    X_scaled, metadata_df, _ = prepare_clustering_features(raw_df)
+    feature_df = build_feature_dataframe(raw_df)
 
-    model = load_model_artifacts()
+    if not MODEL_PATH.exists() or not SCALER_PATH.exists():
+        st.error("❌ Missing model artifacts! Train the model first via `python -m src.train`.")
+        st.stop()
 
-    # Predict scores and anomaly flags
-    scores = model.decision_function(X_scaled)
-    predictions = model.predict(X_scaled)
+    model = joblib.load(MODEL_PATH)
+    scaler = joblib.load(SCALER_PATH)
 
-    # Combine results with raw dataframe for display
-    scored_df = raw_df.copy()
-    scored_df["anomaly_score"] = np.round(scores, 5)
-    scored_df["is_anomaly"] = np.where(predictions == -1, "Flagged", "Normal")
+    scaled_features = scaler.transform(feature_df)
+    predictions = model.predict(scaled_features)
+    decision_scores = model.decision_function(scaled_features)
 
-    return scored_df
+    df_results = raw_df.copy()
+    df_results["anomaly_score"] = decision_scores
+    df_results["is_anomaly"] = np.where(predictions == -1, 1, 0)
+
+    return df_results
 
 
-# --- MAIN APP LAYOUT ---
-st.title("🚨 Debit Transactions Anomaly & Investigation Dashboard")
-st.markdown(
-    "Monitor posting patterns, inspect flagged suspicious debit activity, and investigate individual transactions."
-)
+# --- HEADER ---
+st.title("🛡️ Debit Transactions Anomaly & Drift Dashboard")
+st.caption("Real-time MLOps Monitoring, Isolation Forest Anomaly Detection, and Data Drift Analysis")
 
-with st.spinner("Loading transaction dataset and running anomaly detection..."):
-    df = load_and_score_data()
+# --- LOAD DATA ---
+with st.spinner("Loading production transaction data and running model inference..."):
+    df = load_data_and_predict()
 
-# --- TOP METRICS CARDS ---
-total_trx = len(df)
-flagged_df = df[df["is_anomaly"] == "Flagged"]
-total_flagged = len(flagged_df)
-anomaly_rate = (total_flagged / total_trx) * 100
-total_flagged_amt = flagged_df["amt"].sum()
+# --- TOP METRIC KPIS ---
+total_records = len(df)
+anomalies_count = int(df["is_anomaly"].sum())
+anomaly_rate = anomalies_count / total_records
 
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("Total Transactions", f"{total_trx:,}")
-col2.metric("Flagged Anomalies", f"{total_flagged:,}", delta=f"{anomaly_rate:.2f}% Rate", delta_color="inverse")
-col3.metric("Total Flagged Value", f"${total_flagged_amt:,.2f}")
-col4.metric("Avg Flagged Amount", f"${flagged_df['amt'].mean():,.2f}" if total_flagged > 0 else "$0.00")
+col1.metric("Total Transactions Scanned", f"{total_records:,}")
+col2.metric("Flagged Anomalies", f"{anomalies_count:,}", delta_color="inverse")
+col3.metric("Current Anomaly Rate", f"{anomaly_rate:.2%}")
+col4.metric("System Health Status", "🟢 Normal" if anomaly_rate <= 0.05 else "🚨 High Anomaly Rate")
 
-st.divider()
+st.markdown("---")
 
-# --- CHARTS SECTION ---
-st.subheader("📊 Anomaly Distribution & Channel Breakdown")
-chart_col1, chart_col2 = st.columns(2)
+# --- TABS ---
+tab1, tab2, tab3 = st.tabs([
+    "📊 Transaction & Anomaly Investigation",
+    "📈 Risk Feature Analysis",
+    "🧪 Evidently Data Drift Report"
+])
 
-with chart_col1:
-    # Anomaly count by Entry Mode (Channel)
-    channel_summary = (
-        flagged_df.groupby("entry_mode")["transaction_id"]
-        .count()
-        .reset_index()
-        .rename(columns={"entry_mode": "Channel / Entry Mode", "transaction_id": "Flagged Count"})
+with tab1:
+    st.subheader("Filter and Investigate High-Risk Transactions")
+    
+    # Sidebar Filters
+    show_only_anomalies = st.checkbox("Show Only Flagged Anomalies", value=True)
+    
+    filtered_df = df[df["is_anomaly"] == 1] if show_only_anomalies else df
+    
+    st.dataframe(
+        filtered_df.sort_values(by="anomaly_score", ascending=True).head(500),
+        use_container_width=True,
+        hide_index=True,
     )
-    fig_channel = px.bar(
-        channel_summary,
-        x="Channel / Entry Mode",
-        y="Flagged Count",
-        text="Flagged Count",
-        title="Flagged Anomalies by Channel (entry_mode)",
-        color="Channel / Entry Mode",
-        color_discrete_sequence=px.colors.qualitative.Set2,
-    )
-    st.plotly_chart(fig_channel, use_container_width=True)
 
-with chart_col2:
-    # Transaction Amount vs Daily Average Baseline Scatter Plot
-    fig_scatter = px.scatter(
-        df,
-        x="Amt_Avg_Daily",
-        y="amt",
-        color="is_anomaly",
-        color_discrete_map={"Normal": "#A0A0A0", "Flagged": "#FF4B4B"},
-        hover_data=["transaction_id", "customer_id", "entry_mode", "amt"],
-        labels={"Amt_Avg_Daily": "Historical Avg Daily Spend ($)", "amt": "Transaction Amount ($)"},
-        title="Transaction Amount vs Customer Daily Baseline",
-    )
-    st.plotly_chart(fig_scatter, use_container_width=True)
+with tab2:
+    st.subheader("Transaction Distribution & Anomaly Score Spread")
+    
+    col_chart1, col_chart2 = st.columns(2)
+    
+    with col_chart1:
+        fig_score = px.histogram(
+            df,
+            x="anomaly_score",
+            color="is_anomaly",
+            title="Distribution of Isolation Forest Anomaly Decision Scores",
+            labels={"is_anomaly": "Is Anomaly"},
+            color_discrete_map={0: "#1f77b4", 1: "#d62728"},
+            barmode="overlay",
+        )
+        st.plotly_chart(fig_score, use_container_width=True)
 
-st.divider()
+    with col_chart2:
+        fig_amt = px.scatter(
+            df.sample(min(5000, len(df))),
+            x="amt",
+            y="Amt_Avg_Daily",
+            color="is_anomaly",
+            title="Transaction Amount vs. Daily Average Baseline (5k Sample)",
+            labels={"is_anomaly": "Is Anomaly"},
+            color_discrete_map={0: "#1f77b4", 1: "#d62728"},
+            hover_data=["transaction_id", "customer_id"],
+        )
+        st.plotly_chart(fig_amt, use_container_width=True)
 
-# --- INVESTIGATION TABLE ---
-st.subheader("🔎 Flagged Transactions Requiring Investigation")
-
-# Sidebar Filters
-st.sidebar.header("Filter Investigation Queue")
-selected_channel = st.sidebar.multiselect(
-    "Filter by Channel (entry_mode):",
-    options=df["entry_mode"].unique(),
-    default=df["entry_mode"].unique(),
-)
-
-score_threshold = st.sidebar.slider(
-    "Max Anomaly Score (Lower = More Outlier):",
-    min_value=float(df["anomaly_score"].min()),
-    max_value=float(df["anomaly_score"].max()),
-    value=float(df["anomaly_score"].max()),
-    step=0.01,
-)
-
-# Apply filters to flagged dataframe
-filtered_flagged = flagged_df[
-    (flagged_df["entry_mode"].isin(selected_channel))
-    & (flagged_df["anomaly_score"] <= score_threshold)
-].sort_values(by="anomaly_score")
-
-# Select and order required columns explicitly
-display_cols = [
-    "transaction_id",
-    "customer_id",
-    "entry_mode",  # Channel
-    "amt",
-    "Amt_Avg_Daily",
-    "anomaly_score",
-    "MerchantType",
-    "post_ts",
-    "terminal_id",
-]
-
-st.dataframe(
-    filtered_flagged[display_cols].rename(
-        columns={
-            "transaction_id": "Transaction ID",
-            "customer_id": "Customer ID",
-            "entry_mode": "Channel",
-            "amt": "Amount ($)",
-            "Amt_Avg_Daily": "Daily Avg Baseline ($)",
-            "anomaly_score": "Anomaly Score",
-            "MerchantType": "Merchant Category",
-            "post_ts": "Timestamp",
-            "terminal_id": "Terminal ID",
-        }
-    ),
-    use_container_width=True,
-    hide_index=True,
-)
-
-st.caption(
-    f"Showing **{len(filtered_flagged)}** flagged transactions requiring review based on selected filters."
-)
+with tab3:
+    st.subheader("Evidently AI Visual Data Drift Report")
+    
+    if REPORT_PATH.exists():
+        with open(REPORT_PATH, "r", encoding="utf-8") as f:
+            html_data = f.read()
+        components.html(html_data, height=1000, scrolling=True)
+    else:
+        st.warning(
+            "⚠️ No Evidently HTML drift report found. Run `uv run python -m src.monitor` to generate `reports/data_drift_report.html`."
+        )

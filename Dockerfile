@@ -15,6 +15,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 5. Copy project source code and trained model artifacts into the container
 COPY src/ ./src/
 COPY models/ ./models/
+COPY data/ ./data/
 COPY app.py .
 
 # 6. Expose the port Streamlit runs on
