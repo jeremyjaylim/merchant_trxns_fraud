@@ -6,6 +6,7 @@ An end-to-end Machine Learning pipeline designed to detect anomalous debit card 
 📌 Project Overview
 This repository implements a production-grade machine learning workflow for real-time transaction monitoring. By evaluating debit card transactions against learned behavioral profiles based on historical spending patterns, the system identifies outliers and potential fraud in real time.
 
+**NOTE: This was used for the MLOps classroom case study only. Do not use in real transactions fraud monitoring.  The author will not be responsible for the outcome of its actual production use.
 
 
 📁 Repository Structure
